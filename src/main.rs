@@ -2,6 +2,7 @@ use clap::Parser;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
+use regex::Regex;
 
 #[derive(Parser, Debug)]
 #[command(name = "webmd")]
@@ -13,6 +14,10 @@ struct Args {
     /// Output file path (defaults to stdout)
     #[arg(short = 'o', long = "output")]
     output: Option<PathBuf>,
+
+    /// Include images in output (removed by default)
+    #[arg(long = "with-images")]
+    with_images: bool,
 }
 
 fn extract_body_html(html: &str) -> String {
@@ -26,6 +31,11 @@ fn extract_body_html(html: &str) -> String {
     }
 }
 
+fn remove_images(html: &str) -> String {
+    let re = Regex::new(r"<img[^>]*>").unwrap();
+    re.replace_all(html, "").to_string()
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
@@ -34,7 +44,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let html = response.text()?;
 
     // Extract body content to remove script/style tags
-    let body_html = extract_body_html(&html);
+    let mut body_html = extract_body_html(&html);
+
+    // Remove images by default, unless --with-images is specified
+    if !args.with_images {
+        body_html = remove_images(&body_html);
+    }
 
     // Convert HTML to Markdown
     let markdown = html2md::parse_html(&body_html);
