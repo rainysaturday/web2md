@@ -36,6 +36,44 @@ fn remove_images(html: &str) -> String {
     re.replace_all(html, "").to_string()
 }
 
+fn clean_html(html: &str) -> String {
+    let mut cleaned = html.to_string();
+    
+    // Remove script tags and their content
+    let script_re = Regex::new(r"(?s)<script[^>]*>.*?</script>").unwrap();
+    cleaned = script_re.replace_all(&cleaned, "").to_string();
+    
+    // Remove style tags and their content
+    let style_re = Regex::new(r"(?s)<style[^>]*>.*?</style>").unwrap();
+    cleaned = style_re.replace_all(&cleaned, "").to_string();
+    
+    // Remove noscript tags and their content
+    let noscript_re = Regex::new(r"(?s)<noscript[^>]*>.*?</noscript>").unwrap();
+    cleaned = noscript_re.replace_all(&cleaned, "").to_string();
+    
+    // Remove inline event handlers (onclick, onload, etc.)
+    let event_re = Regex::new(r#"\s+on\w+\s*=\s*["'][^"']*["']"#).unwrap();
+    cleaned = event_re.replace_all(&cleaned, "").to_string();
+    
+    // Remove inline style attributes
+    let style_attr_re = Regex::new(r#"\s+style\s*=\s*["'][^"']*["']"#).unwrap();
+    cleaned = style_attr_re.replace_all(&cleaned, "").to_string();
+    
+    // Remove CSS class definitions that appear as text (e.g., .cls-1{fill:#fff})
+    let css_def_re = Regex::new(r"\.[a-zA-Z_][a-zA-Z0-9_-]*\s*\{[^}]*\}").unwrap();
+    cleaned = css_def_re.replace_all(&cleaned, "").to_string();
+    
+    // Remove window.* assignments (e.g., window.Di.bamData = {...})
+    let window_re = Regex::new(r"window\.[a-zA-Z_][a-zA-Z0-9_]*\s*=\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\};?").unwrap();
+    cleaned = window_re.replace_all(&cleaned, "").to_string();
+    
+    // Remove standalone CSS-like patterns (class definitions at start of text)
+    let css_start_re = Regex::new(r"^\s*\.[a-zA-Z_][a-zA-Z0-9_-]*\s*\{[^}]*\}\s*").unwrap();
+    cleaned = css_start_re.replace_all(&cleaned, "").to_string();
+    
+    cleaned
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
@@ -45,6 +83,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Extract body content to remove script/style tags
     let mut body_html = extract_body_html(&html);
+
+    // Clean HTML - remove scripts, styles, CSS, JS
+    body_html = clean_html(&body_html);
 
     // Remove images by default, unless --with-images is specified
     if !args.with_images {
