@@ -28,6 +28,7 @@ pub struct JsEngine {
 unsafe impl Send for JsEngine {}
 unsafe impl Sync for JsEngine {}
 
+#[allow(dead_code)]
 struct Timer {
     id: u32,
     callback: String,
@@ -37,6 +38,7 @@ struct Timer {
     _last_fired: Instant,
 }
 
+#[allow(dead_code)]
 impl JsEngine {
     /// Create a new JS engine instance with a sandboxed context.
     pub fn new(timeout: Duration) -> Self {

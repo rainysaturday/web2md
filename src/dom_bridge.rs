@@ -9,6 +9,7 @@ use std::collections::HashMap;
 ///
 /// The bridge works by intercepting DOM API calls from JS via native
 /// function bindings registered on the `document` and `window` objects.
+#[allow(dead_code)]
 pub struct DomBridge {
     /// The current HTML content being manipulated
     html: String,
@@ -21,6 +22,7 @@ pub struct DomBridge {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum DomChange {
     SetInnerHtml {
         element_id: u64,
@@ -63,6 +65,7 @@ enum DomChange {
     },
 }
 
+#[allow(dead_code)]
 impl DomBridge {
     /// Create a new DOM bridge for the given HTML content.
     pub fn new(html: String) -> Self {

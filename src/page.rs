@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 /// The state of a page in its render lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum PageState {
     /// HTML is being fetched from the network.
     Fetching,
@@ -77,6 +78,7 @@ pub struct Page {
     /// Whether the render timeout has been hit.
     timed_out: bool,
     /// Pending timer count (tracked separately for stabilization).
+    #[allow(dead_code)]
     pending_timers: u32,
     /// Whether the page has been quiet (no changes) for the quiet period.
     was_quiet: bool,
@@ -84,6 +86,7 @@ pub struct Page {
     last_change_time: Option<Instant>,
 }
 
+#[allow(dead_code)]
 impl Page {
     /// Create a new page for the given URL with optional JS support.
     pub fn new(url: String, html: String, config: RenderConfig) -> Self {
@@ -461,6 +464,7 @@ impl Drop for Page {
 // Helper functions from main.rs, duplicated here for page module use
 use regex::Regex;
 
+#[allow(dead_code)]
 fn extract_body_html(html: &str) -> String {
     let document = scraper::Html::parse_document(html);
     let body_selector = scraper::Selector::parse("body").unwrap();
