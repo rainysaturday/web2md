@@ -180,7 +180,7 @@ impl Page {
 
         // Step 3: Process timers and wait for stabilization
         let max_render_time = self.config.render_timeout;
-        let quiet_period = self.config.quiet_period;
+        let _quiet_period = self.config.quiet_period;
         let start = Instant::now();
 
         loop {

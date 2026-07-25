@@ -199,13 +199,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             log_file,
         }) => {
             // Daemon subcommand
-            let listen_port = *port.or(args.daemon_port);
+            let listen_port = port.or(args.daemon_port);
             let socket_path = socket.clone().or(args.daemon_socket);
             let is_background = *background || args.daemon_background;
 
-            if let Some(log_path) = log_file.or(args.daemon_log_file.as_ref()) {
+            if let Some(_log_path) = log_file.clone().or(args.daemon_log_file.clone()) {
                 // Redirect logs to file (simplified)
-                let _ = log_path;
+                let _ = _log_path;
             }
 
             daemon::start_daemon(listen_port, socket_path, is_background).await?;

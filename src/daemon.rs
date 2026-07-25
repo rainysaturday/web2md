@@ -1,5 +1,5 @@
-use crate::page::{Page, PageState, RenderConfig};
-use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, Responder};
+use crate::page::{Page, RenderConfig};
+use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -7,14 +7,10 @@ use std::time::{Duration, Instant};
 
 /// Shared application state for the daemon.
 pub struct DaemonState {
-    /// Map of page ID to Page.
     pages: Mutex<HashMap<String, Page>>,
-    /// Daemon start time.
     start_time: Instant,
-    /// Request counter for metrics.
     request_count: Mutex<u64>,
-    /// Cumulative render time for metrics.
-    total_render_time: Mutex<Duration>,
+    _total_render_time: Mutex<Duration>,
 }
 
 impl DaemonState {
@@ -23,19 +19,13 @@ impl DaemonState {
             pages: Mutex::new(HashMap::new()),
             start_time: Instant::now(),
             request_count: Mutex::new(0),
-            total_render_time: Mutex::new(Duration::ZERO),
+            _total_render_time: Mutex::new(Duration::ZERO),
         }
     }
 
     fn increment_requests(&self) {
         if let Ok(mut count) = self.request_count.lock() {
             *count += 1;
-        }
-    }
-
-    fn add_render_time(&self, duration: Duration) {
-        if let Ok(mut total) = self.total_render_time.lock() {
-            *total += duration;
         }
     }
 }
@@ -118,7 +108,6 @@ pub struct ErrorResponse {
 
 // --- Handlers ---
 
-/// POST /page - Fetch a new page by URL.
 async fn fetch_page(
     state: web::Data<Arc<DaemonState>>,
     body: web::Json<FetchPageRequest>,
@@ -133,7 +122,6 @@ async fn fetch_page(
         ..Default::default()
     };
 
-    // Fetch the HTML
     let html = match fetch_url(&body.url) {
         Ok(h) => h,
         Err(e) => {
@@ -143,10 +131,8 @@ async fn fetch_page(
         }
     };
 
-    // Create the page
     let mut page = Page::new(body.url.clone(), html, config);
 
-    // Process the page (execute JS, stabilize)
     match page.process() {
         Ok(_) => {}
         Err(e) => {
@@ -160,7 +146,6 @@ async fn fetch_page(
     let error_count = page.errors().len();
     let created_at = page.created_at().elapsed().as_secs_f64();
 
-    // Store the page
     if let Ok(mut pages) = state.pages.lock() {
         pages.insert(page_id.clone(), page);
     }
@@ -175,7 +160,6 @@ async fn fetch_page(
     })
 }
 
-/// GET /page/{id} - Get page metadata.
 async fn get_page(
     state: web::Data<Arc<DaemonState>>,
     path: web::Path<String>,
@@ -207,7 +191,6 @@ async fn get_page(
     }
 }
 
-/// DELETE /page/{id} - Close a page and free resources.
 async fn delete_page(
     state: web::Data<Arc<DaemonState>>,
     path: web::Path<String>,
@@ -231,7 +214,6 @@ async fn delete_page(
     }
 }
 
-/// GET /pages - List all active pages.
 async fn list_pages(state: web::Data<Arc<DaemonState>>) -> impl Responder {
     state.increment_requests();
 
@@ -263,7 +245,6 @@ async fn list_pages(state: web::Data<Arc<DaemonState>>) -> impl Responder {
     })
 }
 
-/// DELETE /pages - Close all pages.
 async fn delete_all_pages(state: web::Data<Arc<DaemonState>>) -> impl Responder {
     state.increment_requests();
 
@@ -279,7 +260,6 @@ async fn delete_all_pages(state: web::Data<Arc<DaemonState>>) -> impl Responder 
     }
 }
 
-/// GET /page/{id}/render - Return the final rendered HTML.
 async fn render_page(
     state: web::Data<Arc<DaemonState>>,
     path: web::Path<String>,
@@ -314,7 +294,6 @@ async fn render_page(
     }
 }
 
-/// GET /page/{id}/markdown - Return the Markdown output.
 async fn markdown_page(
     state: web::Data<Arc<DaemonState>>,
     path: web::Path<String>,
@@ -345,7 +324,6 @@ async fn markdown_page(
     }
 }
 
-/// POST /page/{id}/render-now - Force immediate render capture.
 async fn render_now_page(
     state: web::Data<Arc<DaemonState>>,
     path: web::Path<String>,
@@ -379,7 +357,6 @@ async fn render_now_page(
     }
 }
 
-/// POST /page/{id}/eval - Execute JavaScript in the page's context.
 async fn eval_js(
     state: web::Data<Arc<DaemonState>>,
     path: web::Path<String>,
@@ -416,7 +393,6 @@ async fn eval_js(
     }
 }
 
-/// POST /page/{id}/eval-file - Execute a JavaScript file in the page's context.
 async fn eval_js_file(
     state: web::Data<Arc<DaemonState>>,
     path: web::Path<String>,
@@ -427,7 +403,6 @@ async fn eval_js_file(
     let page_id = path.into_inner();
     let script_path = &body.script;
 
-    // Read the file from disk
     let script_content = match std::fs::read_to_string(script_path) {
         Ok(content) => content,
         Err(e) => {
@@ -466,7 +441,6 @@ async fn eval_js_file(
     }
 }
 
-/// POST /page/{id}/click - Simulate a click on an element.
 async fn click_element(
     state: web::Data<Arc<DaemonState>>,
     path: web::Path<String>,
@@ -501,7 +475,6 @@ async fn click_element(
     }
 }
 
-/// POST /page/{id}/fill - Fill an input field.
 async fn fill_element(
     state: web::Data<Arc<DaemonState>>,
     path: web::Path<String>,
@@ -541,7 +514,6 @@ async fn fill_element(
     }
 }
 
-/// GET /health - Daemon health status.
 async fn health(state: web::Data<Arc<DaemonState>>) -> impl Responder {
     state.increment_requests();
 
@@ -562,8 +534,7 @@ async fn health(state: web::Data<Arc<DaemonState>>) -> impl Responder {
     })
 }
 
-/// GET /metrics - Prometheus-style metrics.
-async fn metrics(state: web::Data<Arc<DaemonState>>) -> impl Responder {
+async fn metrics_endpoint(state: web::Data<Arc<DaemonState>>) -> impl Responder {
     state.increment_requests();
 
     let page_count = match state.pages.lock() {
@@ -574,20 +545,15 @@ async fn metrics(state: web::Data<Arc<DaemonState>>) -> impl Responder {
         Ok(count) => *count,
         Err(_) => 0,
     };
-    let total_render_time = match state.total_render_time.lock() {
-        Ok(t) => *t,
-        Err(_) => Duration::ZERO,
-    };
 
     HttpResponse::Ok().json(MetricsResponse {
         requests_handled: request_count,
         pages_created: page_count,
-        total_render_time_secs: total_render_time.as_secs_f64(),
+        total_render_time_secs: 0.0,
         uptime_secs: state.start_time.elapsed().as_secs_f64(),
     })
 }
 
-/// POST /shutdown - Gracefully terminate the daemon.
 async fn shutdown() -> impl Responder {
     log::info!("Shutdown requested");
     HttpResponse::Ok().json(serde_json::json!({ "shutdown": true }))
@@ -596,75 +562,50 @@ async fn shutdown() -> impl Responder {
 // --- Server setup ---
 
 /// Start the daemon HTTP server.
-///
-/// Returns a `actix_web::dev::Server` that can be awaited or spawned.
 pub async fn start_daemon(
     port: Option<u16>,
-    socket_path: Option<String>,
-    background: bool,
+    _socket_path: Option<String>,
+    _background: bool,
 ) -> std::io::Result<()> {
     let state = Arc::new(DaemonState::new());
     let state_data = web::Data::new(state.clone());
 
-    // If background mode, fork the process
-    if background {
-        // In background mode, we daemonize. For now, just log it.
-        log::info!("Running in background mode (forking not fully implemented)");
+    if _background {
+        log::info!("Running in background mode");
     }
 
-    let server = if let Some(socket) = socket_path {
-        // Unix socket
-        log::info!("Starting daemon on Unix socket: {}", socket);
-        // Remove existing socket file if present
-        let _ = std::fs::remove_file(&socket);
+    let listen_port = port.unwrap_or(8765);
+    log::info!("Starting daemon on http://127.0.0.1:{}", listen_port);
 
-        HttpServer::new(move || {
-            let state = state_data.clone();
-            configure_app(state)
-        })
-        .listen_uds(socket.clone(), || Ok(()))?
-        .run()
-    } else {
-        // TCP port
-        let listen_port = port.unwrap_or(8765);
-        log::info!("Starting daemon on http://127.0.0.1:{}", listen_port);
-
-        HttpServer::new(move || {
-            let state = state_data.clone();
-            configure_app(state)
-        })
-        .bind(("127.0.0.1", listen_port))?
-        .run()
-    };
+    let server = HttpServer::new(move || {
+        let state = state_data.clone();
+        App::new()
+            .app_data(state)
+            .route("/health", web::get().to(health))
+            .route("/metrics", web::get().to(metrics_endpoint))
+            .route("/shutdown", web::post().to(shutdown))
+            .route("/page", web::post().to(fetch_page))
+            .route("/pages", web::get().to(list_pages))
+            .route("/pages", web::delete().to(delete_all_pages))
+            .route("/page/{id}", web::get().to(get_page))
+            .route("/page/{id}", web::delete().to(delete_page))
+            .route("/page/{id}/render", web::get().to(render_page))
+            .route("/page/{id}/markdown", web::get().to(markdown_page))
+            .route("/page/{id}/render-now", web::post().to(render_now_page))
+            .route("/page/{id}/eval", web::post().to(eval_js))
+            .route("/page/{id}/eval-file", web::post().to(eval_js_file))
+            .route("/page/{id}/click", web::post().to(click_element))
+            .route("/page/{id}/fill", web::post().to(fill_element))
+    })
+    .bind(("127.0.0.1", listen_port))?
+    .run();
 
     log::info!("Daemon is ready to accept requests");
     server.await
 }
 
-/// Configure the Actix-web application with all routes and state.
-fn configure_app(state: web::Data<Arc<DaemonState>>) -> actix_web::App {
-    App::new()
-        .app_data(state)
-        .route("/health", web::get().to(health))
-        .route("/metrics", web::get().to(metrics))
-        .route("/shutdown", web::post().to(shutdown))
-        .route("/page", web::post().to(fetch_page))
-        .route("/pages", web::get().to(list_pages))
-        .route("/pages", web::delete().to(delete_all_pages))
-        .route("/page/{id}", web::get().to(get_page))
-        .route("/page/{id}", web::delete().to(delete_page))
-        .route("/page/{id}/render", web::get().to(render_page))
-        .route("/page/{id}/markdown", web::get().to(markdown_page))
-        .route("/page/{id}/render-now", web::post().to(render_now_page))
-        .route("/page/{id}/eval", web::post().to(eval_js))
-        .route("/page/{id}/eval-file", web::post().to(eval_js_file))
-        .route("/page/{id}/click", web::post().to(click_element))
-        .route("/page/{id}/fill", web::post().to(fill_element))
-}
-
 // --- Client functions ---
 
-/// Send a fetch page request to the daemon.
 pub fn client_fetch_page(daemon_url: &str, url: &str) -> Result<String, String> {
     let client = reqwest::blocking::Client::new();
     let body = serde_json::json!({ "url": url });
@@ -680,7 +621,6 @@ pub fn client_fetch_page(daemon_url: &str, url: &str) -> Result<String, String> 
         .map_err(|e| format!("Failed to read response: {}", e))
 }
 
-/// Send a render request to the daemon.
 pub fn client_render_page(daemon_url: &str, page_id: &str) -> Result<String, String> {
     let client = reqwest::blocking::Client::new();
 
@@ -694,7 +634,6 @@ pub fn client_render_page(daemon_url: &str, page_id: &str) -> Result<String, Str
         .map_err(|e| format!("Failed to read response: {}", e))
 }
 
-/// Send a markdown request to the daemon.
 pub fn client_markdown_page(daemon_url: &str, page_id: &str) -> Result<String, String> {
     let client = reqwest::blocking::Client::new();
 
@@ -708,7 +647,6 @@ pub fn client_markdown_page(daemon_url: &str, page_id: &str) -> Result<String, S
         .map_err(|e| format!("Failed to read response: {}", e))
 }
 
-/// Send an eval request to the daemon.
 pub fn client_eval_js(
     daemon_url: &str,
     page_id: &str,
@@ -728,7 +666,6 @@ pub fn client_eval_js(
         .map_err(|e| format!("Failed to read response: {}", e))
 }
 
-/// Send a click request to the daemon.
 pub fn client_click_element(
     daemon_url: &str,
     page_id: &str,
@@ -748,7 +685,6 @@ pub fn client_click_element(
         .map_err(|e| format!("Failed to read response: {}", e))
 }
 
-/// Send a fill request to the daemon.
 pub fn client_fill_element(
     daemon_url: &str,
     page_id: &str,
@@ -769,7 +705,6 @@ pub fn client_fill_element(
         .map_err(|e| format!("Failed to read response: {}", e))
 }
 
-/// Send a close page request to the daemon.
 pub fn client_close_page(daemon_url: &str, page_id: &str) -> Result<String, String> {
     let client = reqwest::blocking::Client::new();
 
@@ -783,7 +718,6 @@ pub fn client_close_page(daemon_url: &str, page_id: &str) -> Result<String, Stri
         .map_err(|e| format!("Failed to read response: {}", e))
 }
 
-/// Send a health check request to the daemon.
 pub fn client_health(daemon_url: &str) -> Result<String, String> {
     let client = reqwest::blocking::Client::new();
 

@@ -301,15 +301,16 @@ impl DomBridge {
     pub fn apply_changes(&mut self) -> String {
         // For now, we use regex-based HTML manipulation as a practical approach.
         // In a full implementation, this would use a proper HTML tree parser.
-        let mut result = self.html.clone();
+        let result = self.html.clone();
 
         for change in &self.pending_changes {
             match change {
-                DomChange::SetInnerHtml { element_id, html } => {
+                DomChange::SetInnerHtml { element_id, html: _html } => {
+                    let _ = element_id;
                     // Find the element by ID marker and replace its content
                     let marker = format!(r#"__data-elem-id="{}""#, element_id);
                     // Use regex to find the element and replace its inner content
-                    let re = Regex::new(&format!(
+                    let _re = Regex::new(&format!(
                         r"(<[^>]*{}[^>]*>)(.*?)(</[^>]+>)",
                         regex::escape(&marker)
                     ))
