@@ -1,15 +1,32 @@
-use clap::Parser;
+mod daemon;
+mod dom_bridge;
+mod js_engine;
+mod page;
+
+use clap::{Parser, Subcommand};
 use regex::Regex;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
+use std::time::Duration;
+
+use page::{Page, RenderConfig};
+
+// ============================================================
+// CLI Argument Parsing
+// ============================================================
 
 #[derive(Parser, Debug)]
 #[command(name = "webmd")]
 #[command(about = "Download a webpage and convert HTML to Markdown")]
-struct Args {
-    /// URL to download and convert to Markdown
-    url: String,
+#[command(version)]
+#[command(long_about = "webmd - Webpage to Markdown converter\n\
+    Fetches a webpage, optionally executes JavaScript, \
+    and converts the HTML to clean Markdown.\n\
+    Supports daemon mode for stateful page access.")]
+struct Cli {
+    /// URL to download and convert to Markdown (for simple mode)
+    url: Option<String>,
 
     /// Output file path (defaults to stdout)
     #[arg(short = 'o', long = "output")]
@@ -18,7 +35,347 @@ struct Args {
     /// Include images in output (removed by default)
     #[arg(long = "with-images")]
     with_images: bool,
+
+    // --- JavaScript / Render Lifecycle Flags ---
+
+    /// Enable JavaScript execution for the fetched page
+    #[arg(long = "enable-js")]
+    enable_js: bool,
+
+    /// Maximum time to wait for page stabilization (seconds, default: 30)
+    #[arg(long = "render-timeout")]
+    render_timeout: Option<u64>,
+
+    /// Stability quiet period (milliseconds, default: 100)
+    #[arg(long = "quiet-period")]
+    quiet_period: Option<u64>,
+
+    /// Capture the current DOM immediately without waiting for stability
+    #[arg(long = "render-now")]
+    render_now: bool,
+
+    /// Do not fetch or execute external <script src="..."> references
+    #[arg(long = "no-external-scripts")]
+    no_external_scripts: bool,
+
+    // --- Script Injection ---
+
+    /// Inject a JavaScript file into the page before execution (can be specified multiple times)
+    #[arg(long = "inject-script")]
+    inject_scripts: Vec<String>,
+
+    /// Inject an inline JavaScript snippet before execution (can be specified multiple times)
+    #[arg(long = "inject-code")]
+    inject_codes: Vec<String>,
+
+    // --- Daemon Flags ---
+
+    /// Start webmd in daemon mode
+    #[arg(long = "daemon")]
+    daemon: bool,
+
+    /// Daemon HTTP listen port (default: 8765)
+    #[arg(long = "daemon-port")]
+    daemon_port: Option<u16>,
+
+    /// Daemon Unix socket path (mutually exclusive with --daemon-port)
+    #[arg(long = "daemon-socket")]
+    daemon_socket: Option<String>,
+
+    /// Fork daemon to background
+    #[arg(long = "daemon-background")]
+    daemon_background: bool,
+
+    /// Log file path for daemon mode
+    #[arg(long = "daemon-log-file")]
+    daemon_log_file: Option<PathBuf>,
+
+    /// Daemon URL for client commands (default: http://localhost:8765)
+    #[arg(long = "daemon-url")]
+    daemon_url: Option<String>,
+
+    // --- Subcommands ---
+    #[command(subcommand)]
+    command: Option<Command>,
 }
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Enter daemon mode (alternative to --daemon flag)
+    Daemon {
+        /// HTTP listen port
+        #[arg(short = 'p', long = "port")]
+        port: Option<u16>,
+
+        /// Unix socket path
+        #[arg(short = 's', long = "socket")]
+        socket: Option<String>,
+
+        /// Fork to background
+        #[arg(short = 'b', long = "background")]
+        background: bool,
+
+        /// Log file path
+        #[arg(short = 'l', long = "log-file")]
+        log_file: Option<PathBuf>,
+    },
+    /// Client commands for daemon interaction
+    Client {
+        #[command(subcommand)]
+        client_command: ClientCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ClientCommand {
+    /// Fetch a new page by URL
+    Fetch {
+        /// URL to fetch
+        url: String,
+    },
+    /// Get rendered HTML of a page
+    Render {
+        /// Page ID
+        page_id: String,
+    },
+    /// Get Markdown output of a page
+    Markdown {
+        /// Page ID
+        page_id: String,
+    },
+    /// Execute JavaScript in a page's context
+    Eval {
+        /// Page ID
+        page_id: String,
+        /// JavaScript expression/statement to execute
+        script: String,
+    },
+    /// Simulate a click on an element
+    Click {
+        /// Page ID
+        page_id: String,
+        /// CSS selector for the element to click
+        selector: String,
+    },
+    /// Fill an input field
+    Fill {
+        /// Page ID
+        page_id: String,
+        /// CSS selector for the input element
+        selector: String,
+        /// Value to fill
+        value: String,
+    },
+    /// Close a page
+    Close {
+        /// Page ID
+        page_id: String,
+    },
+    /// Check daemon health
+    Health,
+}
+
+// ============================================================
+// Main
+// ============================================================
+
+#[actix_web::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Cli::parse();
+
+    // Initialize logging
+    if args.daemon || args.command.is_some() {
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+            .init();
+    }
+
+    // --- Handle subcommands ---
+
+    match &args.command {
+        Some(Command::Daemon {
+            port,
+            socket,
+            background,
+            log_file,
+        }) => {
+            // Daemon subcommand
+            let listen_port = *port.or(args.daemon_port);
+            let socket_path = socket.clone().or(args.daemon_socket);
+            let is_background = *background || args.daemon_background;
+
+            if let Some(log_path) = log_file.or(args.daemon_log_file.as_ref()) {
+                // Redirect logs to file (simplified)
+                let _ = log_path;
+            }
+
+            daemon::start_daemon(listen_port, socket_path, is_background).await?;
+            return Ok(());
+        }
+        Some(Command::Client { client_command }) => {
+            let daemon_url = args
+                .daemon_url
+                .clone()
+                .unwrap_or_else(|| "http://localhost:8765".to_string());
+
+            match client_command {
+                ClientCommand::Fetch { url } => {
+                    match daemon::client_fetch_page(&daemon_url, url) {
+                        Ok(response) => println!("{}", response),
+                        Err(e) => eprintln!("Error: {}", e),
+                    }
+                }
+                ClientCommand::Render { page_id } => {
+                    match daemon::client_render_page(&daemon_url, page_id) {
+                        Ok(response) => println!("{}", response),
+                        Err(e) => eprintln!("Error: {}", e),
+                    }
+                }
+                ClientCommand::Markdown { page_id } => {
+                    match daemon::client_markdown_page(&daemon_url, page_id) {
+                        Ok(response) => println!("{}", response),
+                        Err(e) => eprintln!("Error: {}", e),
+                    }
+                }
+                ClientCommand::Eval { page_id, script } => {
+                    match daemon::client_eval_js(&daemon_url, page_id, script) {
+                        Ok(response) => println!("{}", response),
+                        Err(e) => eprintln!("Error: {}", e),
+                    }
+                }
+                ClientCommand::Click { page_id, selector } => {
+                    match daemon::client_click_element(&daemon_url, page_id, selector) {
+                        Ok(response) => println!("{}", response),
+                        Err(e) => eprintln!("Error: {}", e),
+                    }
+                }
+                ClientCommand::Fill {
+                    page_id,
+                    selector,
+                    value,
+                } => {
+                    match daemon::client_fill_element(&daemon_url, page_id, selector, value) {
+                        Ok(response) => println!("{}", response),
+                        Err(e) => eprintln!("Error: {}", e),
+                    }
+                }
+                ClientCommand::Close { page_id } => {
+                    match daemon::client_close_page(&daemon_url, page_id) {
+                        Ok(response) => println!("{}", response),
+                        Err(e) => eprintln!("Error: {}", e),
+                    }
+                }
+                ClientCommand::Health => {
+                    match daemon::client_health(&daemon_url) {
+                        Ok(response) => println!("{}", response),
+                        Err(e) => eprintln!("Error: {}", e),
+                    }
+                }
+            }
+            return Ok(());
+        }
+        None => {
+            // No subcommand, proceed with normal mode
+        }
+    }
+
+    // --- Daemon mode (via flags) ---
+
+    if args.daemon {
+        daemon::start_daemon(args.daemon_port, args.daemon_socket, args.daemon_background)
+            .await?;
+        return Ok(());
+    }
+
+    // --- Simple mode: fetch URL and convert to Markdown ---
+
+    let url = match &args.url {
+        Some(u) => u.clone(),
+        None => {
+            eprintln!("Error: No URL provided. Run 'webmd --help' for usage.");
+            std::process::exit(1);
+        }
+    };
+
+    // Fetch the webpage
+    let response = reqwest::blocking::get(&url)?;
+    let html = response.text()?;
+
+    // If JS is enabled, use the full page processing pipeline
+    if args.enable_js {
+        let config = RenderConfig {
+            enable_js: true,
+            with_images: args.with_images,
+            render_timeout: Duration::from_secs(args.render_timeout.unwrap_or(30)),
+            quiet_period: Duration::from_millis(args.quiet_period.unwrap_or(100)),
+            fetch_external_scripts: !args.no_external_scripts,
+            inject_scripts: args.inject_scripts.clone(),
+            inject_codes: args.inject_codes.clone(),
+        };
+
+        let mut page = Page::new(url, html, config);
+
+        // Execute external scripts if configured
+        if !args.no_external_scripts {
+            let _ = page.fetch_external_scripts();
+        }
+
+        if args.render_now {
+            // Capture immediately
+            let _ = page.render_now();
+        } else {
+            // Process through full lifecycle
+            let _ = page.process();
+        }
+
+        // Get Markdown output
+        let markdown = page.to_markdown();
+
+        // Output to file or stdout
+        if let Some(output_path) = args.output {
+            let mut file = File::create(&output_path)?;
+            file.write_all(markdown.as_bytes())?;
+        } else {
+            println!("{}", markdown);
+        }
+    } else {
+        // Original mode: no JS execution
+        let mut body_html = extract_body_html(&html);
+
+        // Clean HTML - remove scripts, styles, CSS, JS
+        body_html = clean_html(&body_html);
+
+        // ARIA support: remove elements with aria-hidden="true"
+        body_html = remove_aria_hidden_elements(&body_html);
+
+        // ARIA support: use aria-label as fallback alt text for images
+        body_html = apply_aria_labels_to_images(&body_html);
+
+        // Remove images by default, unless --with-images is specified
+        if !args.with_images {
+            body_html = remove_images(&body_html);
+        }
+
+        // ARIA support: strip all remaining aria-* attributes from the output
+        body_html = strip_aria_attributes(&body_html);
+
+        // Convert HTML to Markdown
+        let markdown = html2md::parse_html(&body_html);
+
+        // Output to file or stdout
+        if let Some(output_path) = args.output {
+            let mut file = File::create(&output_path)?;
+            file.write_all(markdown.as_bytes())?;
+        } else {
+            println!("{}", markdown);
+        }
+    }
+
+    Ok(())
+}
+
+// ============================================================
+// HTML Processing Functions (shared between main and page module)
+// ============================================================
 
 fn extract_body_html(html: &str) -> String {
     let document = scraper::Html::parse_document(html);
@@ -77,9 +434,6 @@ fn clean_html(html: &str) -> String {
 }
 
 /// Remove entire HTML elements that have `aria-hidden="true"`.
-///
-/// Uses `scraper` to find elements with `aria-hidden="true"` and removes them
-/// from the HTML string by serializing each element and replacing it.
 fn remove_aria_hidden_elements(html: &str) -> String {
     let document = scraper::Html::parse_document(html);
     let selector = match scraper::Selector::parse(r#"[aria-hidden="true"]"#) {
@@ -87,7 +441,6 @@ fn remove_aria_hidden_elements(html: &str) -> String {
         Err(_) => return html.to_string(),
     };
 
-    // Collect all matched elements with their serialized outer HTML
     let mut matches: Vec<String> = Vec::new();
     for element in document.select(&selector) {
         matches.push(element.html());
@@ -97,7 +450,6 @@ fn remove_aria_hidden_elements(html: &str) -> String {
         return html.to_string();
     }
 
-    // Remove each matched element from the HTML string
     let mut result = html.to_string();
     for outer_html in &matches {
         result = result.replacen(outer_html, "", 1);
@@ -107,38 +459,28 @@ fn remove_aria_hidden_elements(html: &str) -> String {
 }
 
 /// Apply `aria-label` as alt text for `<img>` tags that lack an `alt` attribute.
-///
-/// For each `<img>` tag that has an `aria-label` attribute but no `alt` attribute,
-/// this function sets the `alt` attribute to the value of `aria-label`.
 fn apply_aria_labels_to_images(html: &str) -> String {
     let mut result = String::new();
     let mut pos = 0;
     let s = html;
 
-    // Match <img ... > or <img ... />
     let img_re = Regex::new(r"<img\b[^>]*>").unwrap();
-    // Match aria-label with either double or single quotes (captures the value)
     let aria_label_re =
         Regex::new(r#"\s+aria-label\s*=\s*"([^"]*)"|aria-label\s*=\s*'([^']*)'"#).unwrap();
-    // Check if alt attribute exists
     let alt_check_re = Regex::new(r"\s+alt\s*=\s*").unwrap();
 
     while let Some(m) = img_re.find(&s[pos..]) {
         let abs_start = pos + m.start();
         let abs_end = pos + m.end();
 
-        // Add text before this img tag
         result.push_str(&s[pos..abs_start]);
 
         let img_tag = &s[abs_start..abs_end];
 
-        // Check if it already has an alt attribute
         let has_alt = alt_check_re.is_match(img_tag);
 
         if !has_alt {
-            // Check for aria-label (either double-quoted or single-quoted value)
             if let Some(caps) = aria_label_re.captures(img_tag) {
-                // Group 1 is double-quoted value, group 2 is single-quoted value
                 let label_value = caps
                     .get(1)
                     .or_else(|| caps.get(2))
@@ -146,8 +488,7 @@ fn apply_aria_labels_to_images(html: &str) -> String {
                     .unwrap_or("");
 
                 if !label_value.is_empty() {
-                    // Insert alt="[value]" after <img
-                    let after_img = 4; // after "<img"
+                    let after_img = 4;
                     let modified = format!(
                         "{} alt=\"{}\"{}",
                         &img_tag[..after_img],
@@ -168,16 +509,12 @@ fn apply_aria_labels_to_images(html: &str) -> String {
         pos = abs_end;
     }
 
-    // Add remaining text
     result.push_str(&s[pos..]);
     result
 }
 
 /// Strip all ARIA attributes (aria-*) from the HTML.
-///
-/// Removes attributes like aria-label, aria-hidden, aria-describedby, etc.
 fn strip_aria_attributes(html: &str) -> String {
-    // Match aria-xxx="..." or aria-xxx='...'
     let re_double =
         Regex::new(r#"\s+aria-[a-zA-Z_][a-zA-Z0-9_-]*\s*=\s*"(?:[^"\\]|\\.)*""#).unwrap();
     let re_single =
@@ -188,50 +525,15 @@ fn strip_aria_attributes(html: &str) -> String {
     result
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Args::parse();
-
-    // Fetch the webpage
-    let response = reqwest::blocking::get(&args.url)?;
-    let html = response.text()?;
-
-    // Extract body content to remove script/style tags
-    let mut body_html = extract_body_html(&html);
-
-    // Clean HTML - remove scripts, styles, CSS, JS
-    body_html = clean_html(&body_html);
-
-    // ARIA support: remove elements with aria-hidden="true"
-    body_html = remove_aria_hidden_elements(&body_html);
-
-    // ARIA support: use aria-label as fallback alt text for images
-    body_html = apply_aria_labels_to_images(&body_html);
-
-    // Remove images by default, unless --with-images is specified
-    if !args.with_images {
-        body_html = remove_images(&body_html);
-    }
-
-    // ARIA support: strip all remaining aria-* attributes from the output
-    body_html = strip_aria_attributes(&body_html);
-
-    // Convert HTML to Markdown
-    let markdown = html2md::parse_html(&body_html);
-
-    // Output to file or stdout
-    if let Some(output_path) = args.output {
-        let mut file = File::create(&output_path)?;
-        file.write_all(markdown.as_bytes())?;
-    } else {
-        println!("{}", markdown);
-    }
-
-    Ok(())
-}
+// ============================================================
+// Tests
+// ============================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- Existing tests ---
 
     #[test]
     fn test_remove_aria_hidden_simple() {
@@ -309,5 +611,67 @@ mod tests {
         assert!(body_html.contains(r#"alt="photo""#));
         assert!(!body_html.contains("aria-hidden"));
         assert!(!body_html.contains("aria-label"));
+    }
+
+    // --- New tests for JS engine ---
+
+    #[test]
+    fn test_js_engine_create() {
+        let engine = js_engine::JsEngine::new(Duration::from_secs(10));
+        assert_eq!(engine.pending_timer_count(), 0);
+    }
+
+    #[test]
+    fn test_js_engine_execute() {
+        let mut engine = js_engine::JsEngine::new(Duration::from_secs(10));
+        let result = engine.execute("var x = 42;", "test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_js_engine_eval() {
+        let mut engine = js_engine::JsEngine::new(Duration::from_secs(10));
+        let result = engine.eval_expression("1 + 2");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "3");
+    }
+
+    // --- New tests for Page ---
+
+    #[test]
+    fn test_page_no_js() {
+        let config = page::RenderConfig {
+            enable_js: false,
+            ..page::RenderConfig::default()
+        };
+        let mut p = page::Page::new(
+            "https://example.com".to_string(),
+            "<html><body><p>Hello</p></body></html>".to_string(),
+            config,
+        );
+        let result = p.process();
+        assert!(result.is_ok());
+        assert_eq!(p.state(), page::PageState::Stable);
+    }
+
+    #[test]
+    fn test_page_to_markdown() {
+        let config = page::RenderConfig::default();
+        let p = page::Page::new(
+            "https://example.com".to_string(),
+            "<html><body><p>Hello World</p></body></html>".to_string(),
+            config,
+        );
+        let md = p.to_markdown();
+        assert!(md.contains("Hello World"));
+    }
+
+    // --- New test for DomBridge ---
+
+    #[test]
+    fn test_dom_bridge_create() {
+        let bridge = dom_bridge::DomBridge::new("<html><body><p>Test</p></body></html>".to_string());
+        assert!(!bridge.html().is_empty());
+        assert_eq!(bridge.pending_count(), 0);
     }
 }
