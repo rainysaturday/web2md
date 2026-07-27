@@ -82,219 +82,221 @@ impl DomBridge {
     /// This injects `document`, `window`, and element prototypes into the
     /// JavaScript environment with native-backed DOM methods.
     pub fn register_dom_api(&mut self) {
-        // We inject a JS shim layer that intercepts DOM calls
-        // and communicates with Rust via a global `__dom` bridge object.
-        let dom_bridge_js = r#"
-            // Create the DOM bridge namespace
-            var __dom = {
-                _elements: new Map(),
-                _nextId: 1,
-                _document: null,
-                _pendingOps: []
-            };
+        // The actual injection into the JS engine is done by the caller
+        // (Page::setup_js_engine) which calls dom_api_code() and injects it.
+        // This method is kept for backward compatibility.
+    }
 
-            // Create a minimal Document object
-            __dom._document = {
-                _id: '__document__',
-                createElement: function(tagName) {
-                    var id = '__elem_' + (__dom._nextId++);
-                    var el = {
-                        _id: id,
-                        _tag: tagName.toLowerCase(),
-                        _attributes: {},
-                        _children: [],
-                        _parent: null,
-                        _innerHTML: '',
-                        _textContent: '',
-                        _classList: { _classes: [] },
-                        _style: {}
-                    };
-                    __dom._elements.set(id, el);
-                    return el;
-                },
-                createTextNode: function(text) {
-                    var id = '__text_' + (__dom._nextId++);
-                    var el = {
-                        _id: id,
-                        _tag: '#text',
-                        _textContent: String(text),
-                        _parent: null
-                    };
-                    __dom._elements.set(id, el);
-                    return el;
-                },
-                querySelector: function(selector) {
-                    // Will be handled by Rust
-                    return null;
-                },
-                querySelectorAll: function(selector) {
-                    return [];
-                },
-                addEventListener: function(type, handler) {
-                    // Store event handlers for later processing
-                    if (!this._events) this._events = {};
-                    if (!this._events[type]) this._events[type] = [];
-                    this._events[type].push(handler);
-                }
-            };
+    /// Returns the JavaScript code that defines the DOM API shim.
+    /// This should be injected into the JS engine before executing page scripts.
+    pub fn dom_api_code(&self) -> &'static str {
+        r#"
+// Create the DOM bridge namespace
+var __dom = {
+    _elements: new Map(),
+    _nextId: 1,
+    _document: null,
+    _pendingOps: []
+};
 
-            // Element prototype methods
-            function __setupElement(el) {
-                el.__defineGetter__('innerHTML', function() {
-                    return this._innerHTML;
-                });
-                el.__defineSetter__('innerHTML', function(val) {
-                    this._innerHTML = val;
-                    __dom._pendingOps.push({op: 'setInnerHTML', id: this._id, html: val});
-                });
+// Create a minimal Document object
+__dom._document = {
+    _id: '__document__',
+    createElement: function(tagName) {
+        var id = '__elem_' + (__dom._nextId++);
+        var el = {
+            _id: id,
+            _tag: tagName.toLowerCase(),
+            _attributes: {},
+            _children: [],
+            _parent: null,
+            _innerHTML: '',
+            _textContent: '',
+            _classList: { _classes: [] },
+            _style: {}
+        };
+        __dom._elements.set(id, el);
+        return el;
+    },
+    createTextNode: function(text) {
+        var id = '__text_' + (__dom._nextId++);
+        var el = {
+            _id: id,
+            _tag: '#text',
+            _textContent: String(text),
+            _parent: null
+        };
+        __dom._elements.set(id, el);
+        return el;
+    },
+    querySelector: function(selector) {
+        // Will be handled by Rust
+        return null;
+    },
+    querySelectorAll: function(selector) {
+        return [];
+    },
+    addEventListener: function(type, handler) {
+        // Store event handlers for later processing
+        if (!this._events) this._events = {};
+        if (!this._events[type]) this._events[type] = [];
+        this._events[type].push(handler);
+    }
+};
 
-                el.__defineGetter__('textContent', function() {
-                    return this._textContent;
-                });
-                el.__defineSetter__('textContent', function(val) {
-                    this._textContent = String(val);
-                    __dom._pendingOps.push({op: 'setTextContent', id: this._id, text: String(val)});
-                });
+// Element prototype methods
+function __setupElement(el) {
+    el.__defineGetter__('innerHTML', function() {
+        return this._innerHTML;
+    });
+    el.__defineSetter__('innerHTML', function(val) {
+        this._innerHTML = val;
+        __dom._pendingOps.push({op: 'setInnerHTML', id: this._id, html: val});
+    });
 
-                el.__defineGetter__('outerHTML', function() {
-                    return '<' + this._tag + '>' + this._innerHTML + '</' + this._tag + '>';
-                });
+    el.__defineGetter__('textContent', function() {
+        return this._textContent;
+    });
+    el.__defineSetter__('textContent', function(val) {
+        this._textContent = String(val);
+        __dom._pendingOps.push({op: 'setTextContent', id: this._id, text: String(val)});
+    });
 
-                el.setAttribute = function(name, value) {
-                    this._attributes[name] = String(value);
-                    __dom._pendingOps.push({op: 'setAttribute', id: this._id, name: name, value: String(value)});
-                };
-                el.getAttribute = function(name) {
-                    return this._attributes[name] || null;
-                };
-                el.removeAttribute = function(name) {
-                    delete this._attributes[name];
-                    __dom._pendingOps.push({op: 'removeAttribute', id: this._id, name: name});
-                };
+    el.__defineGetter__('outerHTML', function() {
+        return '<' + this._tag + '>' + this._innerHTML + '</' + this._tag + '>';
+    });
 
-                el.appendChild = function(child) {
-                    this._children.push(child);
-                    child._parent = this;
-                    __dom._pendingOps.push({op: 'appendChild', parentId: this._id, childId: child._id, childTag: child._tag, childHTML: child._innerHTML});
-                    return child;
-                };
-                el.removeChild = function(child) {
-                    var idx = this._children.indexOf(child);
-                    if (idx > -1) this._children.splice(idx, 1);
-                    child._parent = null;
-                    __dom._pendingOps.push({op: 'removeChild', parentId: this._id, childId: child._id});
-                };
-                el.replaceChild = function(newChild, oldChild) {
-                    var idx = this._children.indexOf(oldChild);
-                    if (idx > -1) this._children[idx] = newChild;
-                    newChild._parent = this;
-                    oldChild._parent = null;
-                    __dom._pendingOps.push({op: 'replaceChild', parentId: this._id, newChildId: newChild._id, oldChildId: oldChild._id});
-                    return oldChild;
-                };
-                el.insertBefore = function(newChild, referenceChild) {
-                    var idx = this._children.indexOf(referenceChild);
-                    if (idx > -1) {
-                        this._children.splice(idx, 0, newChild);
-                    } else {
-                        this._children.push(newChild);
-                    }
-                    newChild._parent = this;
-                    __dom._pendingOps.push({op: 'insertBefore', parentId: this._id, newChildId: newChild._id, refChildId: referenceChild._id});
-                };
+    el.setAttribute = function(name, value) {
+        this._attributes[name] = String(value);
+        __dom._pendingOps.push({op: 'setAttribute', id: this._id, name: name, value: String(value)});
+    };
+    el.getAttribute = function(name) {
+        return this._attributes[name] || null;
+    };
+    el.removeAttribute = function(name) {
+        delete this._attributes[name];
+        __dom._pendingOps.push({op: 'removeAttribute', id: this._id, name: name});
+    };
 
-                el.querySelector = function(selector) {
-                    return null;
-                };
-                el.querySelectorAll = function(selector) {
-                    return [];
-                };
-                el.closest = function(selector) {
-                    return null;
-                };
+    el.appendChild = function(child) {
+        this._children.push(child);
+        child._parent = this;
+        __dom._pendingOps.push({op: 'appendChild', parentId: this._id, childId: child._id, childTag: child._tag, childHTML: child._innerHTML});
+        return child;
+    };
+    el.removeChild = function(child) {
+        var idx = this._children.indexOf(child);
+        if (idx > -1) this._children.splice(idx, 1);
+        child._parent = null;
+        __dom._pendingOps.push({op: 'removeChild', parentId: this._id, childId: child._id});
+    };
+    el.replaceChild = function(newChild, oldChild) {
+        var idx = this._children.indexOf(oldChild);
+        if (idx > -1) this._children[idx] = newChild;
+        newChild._parent = this;
+        oldChild._parent = null;
+        __dom._pendingOps.push({op: 'replaceChild', parentId: this._id, newChildId: newChild._id, oldChildId: oldChild._id});
+        return oldChild;
+    };
+    el.insertBefore = function(newChild, referenceChild) {
+        var idx = this._children.indexOf(referenceChild);
+        if (idx > -1) {
+            this._children.splice(idx, 0, newChild);
+        } else {
+            this._children.push(newChild);
+        }
+        newChild._parent = this;
+        __dom._pendingOps.push({op: 'insertBefore', parentId: this._id, newChildId: newChild._id, refChildId: referenceChild._id});
+    };
 
-                el.__defineGetter__('parentElement', function() { return this._parent; });
-                el.__defineGetter__('children', function() { return this._children.slice(); });
-                el.__defineGetter__('nextSibling', function() { return null; });
-                el.__defineGetter__('previousSibling', function() { return null; });
-                el.__defineGetter__('firstChild', function() { return this._children[0] || null; });
-                el.__defineGetter__('lastChild', function() { return this._children[this._children.length - 1] || null; });
+    el.querySelector = function(selector) {
+        return null;
+    };
+    el.querySelectorAll = function(selector) {
+        return [];
+    };
+    el.closest = function(selector) {
+        return null;
+    };
 
-                el.classList = {
-                    _classes: [],
-                    add: function(cls) {
-                        if (this._classes.indexOf(cls) === -1) {
-                            this._classes.push(cls);
-                            el.setAttribute('class', this._classes.join(' '));
-                        }
-                    },
-                    remove: function(cls) {
-                        var idx = this._classes.indexOf(cls);
-                        if (idx > -1) {
-                            this._classes.splice(idx, 1);
-                            el.setAttribute('class', this._classes.join(' '));
-                        }
-                    },
-                    toggle: function(cls) {
-                        var idx = this._classes.indexOf(cls);
-                        if (idx > -1) {
-                            this._classes.splice(idx, 1);
-                        } else {
-                            this._classes.push(cls);
-                        }
-                        el.setAttribute('class', this._classes.join(' '));
-                    }
-                };
+    el.__defineGetter__('parentElement', function() { return this._parent; });
+    el.__defineGetter__('children', function() { return this._children.slice(); });
+    el.__defineGetter__('nextSibling', function() { return null; });
+    el.__defineGetter__('previousSibling', function() { return null; });
+    el.__defineGetter__('firstChild', function() { return this._children[0] || null; });
+    el.__defineGetter__('lastChild', function() { return this._children[this._children.length - 1] || null; });
 
-                el.style = {};
-                el.addEventListener = function(type, handler) {
-                    if (!this._events) this._events = {};
-                    if (!this._events[type]) this._events[type] = [];
-                    this._events[type].push(handler);
-                };
+    el.classList = {
+        _classes: [],
+        add: function(cls) {
+            if (this._classes.indexOf(cls) === -1) {
+                this._classes.push(cls);
+                el.setAttribute('class', this._classes.join(' '));
             }
-
-            // Make document.createElement return enhanced elements
-            var _origCreateElement = __dom._document.createElement;
-            __dom._document.createElement = function(tagName) {
-                var el = _origCreateElement(tagName);
-                __setupElement(el);
-                return el;
-            };
-            var _origCreateTextNode = __dom._document.createTextNode;
-            __dom._document.createTextNode = function(text) {
-                var el = _origCreateTextNode(text);
-                return el;
-            };
-
-            // Set document and window globals
-            var document = __dom._document;
-            var window = window || {};
-            window.document = document;
-
-            // MutationObserver stub
-            var MutationObserver = function(callback) {
-                this._callback = callback;
-                this._observe = function(target, options) {
-                    // Store observer for later
-                    if (!__dom._observers) __dom._observers = [];
-                    __dom._observers.push(this);
-                };
-                this.disconnect = function() {};
-                this.takeRecords = function() { return []; };
-            };
-
-            // DOMContentLoaded event
-            if (document.addEventListener) {
-                document.addEventListener('DOMContentLoaded', function() {
-                    // Fire DOMContentLoaded
-                });
+        },
+        remove: function(cls) {
+            var idx = this._classes.indexOf(cls);
+            if (idx > -1) {
+                this._classes.splice(idx, 1);
+                el.setAttribute('class', this._classes.join(' '));
             }
-        "#;
+        },
+        toggle: function(cls) {
+            var idx = this._classes.indexOf(cls);
+            if (idx > -1) {
+                this._classes.splice(idx, 1);
+            } else {
+                this._classes.push(cls);
+            }
+            el.setAttribute('class', this._classes.join(' '));
+        }
+    };
 
-        // We'll inject this into the JS engine separately
-        // For now, store it for later use
-        self.html = dom_bridge_js.to_string();
+    el.style = {};
+    el.addEventListener = function(type, handler) {
+        if (!this._events) this._events = {};
+        if (!this._events[type]) this._events[type] = [];
+        this._events[type].push(handler);
+    };
+}
+
+// Make document.createElement return enhanced elements
+var _origCreateElement = __dom._document.createElement;
+__dom._document.createElement = function(tagName) {
+    var el = _origCreateElement(tagName);
+    __setupElement(el);
+    return el;
+};
+var _origCreateTextNode = __dom._document.createTextNode;
+__dom._document.createTextNode = function(text) {
+    var el = _origCreateTextNode(text);
+    return el;
+};
+
+// Set document and window globals
+var document = __dom._document;
+var window = window || {};
+window.document = document;
+
+// MutationObserver stub
+var MutationObserver = function(callback) {
+    this._callback = callback;
+    this._observe = function(target, options) {
+        // Store observer for later
+        if (!__dom._observers) __dom._observers = [];
+        __dom._observers.push(this);
+    };
+    this.disconnect = function() {};
+    this.takeRecords = function() { return []; };
+};
+
+// DOMContentLoaded event
+if (document.addEventListener) {
+    document.addEventListener('DOMContentLoaded', function() {
+        // Fire DOMContentLoaded
+    });
+}
+"#
     }
 
     /// Apply pending DOM changes to the underlying HTML document.

@@ -127,10 +127,11 @@ impl Page {
     /// Set up the JS engine and DOM bridge for this page.
     fn setup_js_engine(&mut self) {
         let mut engine = JsEngine::new(self.config.render_timeout);
-        let mut bridge = DomBridge::new(self.html.clone());
+        let bridge = DomBridge::new(self.html.clone());
 
-        // Register the DOM API shim
-        bridge.register_dom_api();
+        // Inject the DOM API shim into the JS engine
+        let dom_api_code = bridge.dom_api_code();
+        let _ = engine.execute(dom_api_code, "dom_api_shim");
 
         // Inject user-provided scripts and code
         for script_path in &self.config.inject_scripts {
