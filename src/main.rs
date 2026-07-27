@@ -219,31 +219,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             match client_command {
                 ClientCommand::Fetch { url } => {
-                    match daemon::client_fetch_page(&daemon_url, url) {
+                    match daemon::client_fetch_page(&daemon_url, url).await {
                         Ok(response) => println!("{}", response),
                         Err(e) => eprintln!("Error: {}", e),
                     }
                 }
                 ClientCommand::Render { page_id } => {
-                    match daemon::client_render_page(&daemon_url, page_id) {
+                    match daemon::client_render_page(&daemon_url, page_id).await {
                         Ok(response) => println!("{}", response),
                         Err(e) => eprintln!("Error: {}", e),
                     }
                 }
                 ClientCommand::Markdown { page_id } => {
-                    match daemon::client_markdown_page(&daemon_url, page_id) {
+                    match daemon::client_markdown_page(&daemon_url, page_id).await {
                         Ok(response) => println!("{}", response),
                         Err(e) => eprintln!("Error: {}", e),
                     }
                 }
                 ClientCommand::Eval { page_id, script } => {
-                    match daemon::client_eval_js(&daemon_url, page_id, script) {
+                    match daemon::client_eval_js(&daemon_url, page_id, script).await {
                         Ok(response) => println!("{}", response),
                         Err(e) => eprintln!("Error: {}", e),
                     }
                 }
                 ClientCommand::Click { page_id, selector } => {
-                    match daemon::client_click_element(&daemon_url, page_id, selector) {
+                    match daemon::client_click_element(&daemon_url, page_id, selector).await {
                         Ok(response) => println!("{}", response),
                         Err(e) => eprintln!("Error: {}", e),
                     }
@@ -253,19 +253,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     selector,
                     value,
                 } => {
-                    match daemon::client_fill_element(&daemon_url, page_id, selector, value) {
+                    match daemon::client_fill_element(&daemon_url, page_id, selector, value).await {
                         Ok(response) => println!("{}", response),
                         Err(e) => eprintln!("Error: {}", e),
                     }
                 }
                 ClientCommand::Close { page_id } => {
-                    match daemon::client_close_page(&daemon_url, page_id) {
+                    match daemon::client_close_page(&daemon_url, page_id).await {
                         Ok(response) => println!("{}", response),
                         Err(e) => eprintln!("Error: {}", e),
                     }
                 }
                 ClientCommand::Health => {
-                    match daemon::client_health(&daemon_url) {
+                    match daemon::client_health(&daemon_url).await {
                         Ok(response) => println!("{}", response),
                         Err(e) => eprintln!("Error: {}", e),
                     }
@@ -297,8 +297,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Fetch the webpage
-    let response = reqwest::blocking::get(&url)?;
-    let html = response.text()?;
+    let response = reqwest::get(&url).await?;
+    let html = response.text().await?;
 
     // If JS is enabled, use the full page processing pipeline
     if args.enable_js {
@@ -316,7 +316,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Execute external scripts if configured
         if !args.no_external_scripts {
-            let _ = page.fetch_external_scripts();
+            let _ = page.fetch_external_scripts().await;
         }
 
         if args.render_now {
@@ -638,8 +638,8 @@ mod tests {
 
     // --- New tests for Page ---
 
-    #[test]
-    fn test_page_no_js() {
+    #[tokio::test]
+    async fn test_page_no_js() {
         let config = page::RenderConfig {
             enable_js: false,
             ..page::RenderConfig::default()
@@ -649,7 +649,7 @@ mod tests {
             "<html><body><p>Hello</p></body></html>".to_string(),
             config,
         );
-        let result = p.process();
+        let result = p.process().await;
         assert!(result.is_ok());
         assert_eq!(p.state(), page::PageState::Stable);
     }

@@ -86,6 +86,11 @@ pub struct Page {
     last_change_time: Option<Instant>,
 }
 
+// SAFETY: `Page` is only accessed under a mutex in multi-threaded contexts (daemon).
+// The `JsEngine` inside is `Send` due to its own unsafe impl.
+unsafe impl Send for Page {}
+unsafe impl Sync for Page {}
+
 #[allow(dead_code)]
 impl Page {
     /// Create a new page for the given URL with optional JS support.
@@ -167,7 +172,7 @@ impl Page {
     /// 2. Process timers and async operations
     /// 3. Wait for stabilization
     /// 4. Return the final HTML
-    pub fn process(&mut self) -> Result<String, String> {
+    pub async fn process(&mut self) -> Result<String, String> {
         if !self.config.enable_js {
             // No JS processing needed, just return the HTML as-is
             self.transition_to(PageState::Stable);
@@ -233,8 +238,8 @@ impl Page {
                 break;
             }
 
-            // Small sleep to avoid busy-waiting
-            std::thread::sleep(Duration::from_millis(10));
+            // Small async sleep to avoid busy-waiting
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
         // Finalize: apply any remaining DOM changes
@@ -280,7 +285,7 @@ impl Page {
     }
 
     /// Execute external scripts referenced by `<script src="...">`.
-    pub fn fetch_external_scripts(&mut self) -> Result<(), String> {
+    pub async fn fetch_external_scripts(&mut self) -> Result<(), String> {
         if !self.config.fetch_external_scripts {
             return Ok(());
         }
@@ -304,9 +309,9 @@ impl Page {
                     format!("{}{}", base_url, src.trim_start_matches('/'))
                 };
 
-                // Fetch the script
-                match reqwest::blocking::get(&absolute_url) {
-                    Ok(response) => match response.text() {
+                // Fetch the script using async reqwest
+                match reqwest::get(&absolute_url).await {
+                    Ok(response) => match response.text().await {
                         Ok(script_content) => {
                             let result = engine.execute(
                                 &script_content,
@@ -617,8 +622,8 @@ mod tests {
         assert_eq!(page.url(), "https://example.com");
     }
 
-    #[test]
-    fn test_page_no_js() {
+    #[tokio::test]
+    async fn test_page_no_js() {
         let config = RenderConfig {
             enable_js: false,
             ..Default::default()
@@ -628,13 +633,13 @@ mod tests {
             "<html><body><p>Hello</p></body></html>".to_string(),
             config,
         );
-        let result = page.process();
+        let result = page.process().await;
         assert!(result.is_ok());
         assert_eq!(page.state(), PageState::Stable);
     }
 
-    #[test]
-    fn test_page_with_js() {
+    #[tokio::test]
+    async fn test_page_with_js() {
         let config = RenderConfig {
             enable_js: true,
             render_timeout: Duration::from_secs(5),
@@ -645,7 +650,7 @@ mod tests {
             "<html><body><p>Hello</p><script>var x = 42;</script></body></html>".to_string(),
             config,
         );
-        let result = page.process();
+        let result = page.process().await;
         assert!(result.is_ok() || result.is_err());
     }
 

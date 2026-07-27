@@ -122,7 +122,7 @@ async fn fetch_page(
         ..Default::default()
     };
 
-    let html = match fetch_url(&body.url) {
+    let html = match fetch_url(&body.url).await {
         Ok(h) => h,
         Err(e) => {
             return HttpResponse::InternalServerError().json(ErrorResponse {
@@ -133,7 +133,7 @@ async fn fetch_page(
 
     let mut page = Page::new(body.url.clone(), html, config);
 
-    match page.process() {
+    match page.process().await {
         Ok(_) => {}
         Err(e) => {
             log::warn!("Page processing warning: {}", e);
@@ -606,136 +606,154 @@ pub async fn start_daemon(
 
 // --- Client functions ---
 
-pub fn client_fetch_page(daemon_url: &str, url: &str) -> Result<String, String> {
-    let client = reqwest::blocking::Client::new();
+pub async fn client_fetch_page(daemon_url: &str, url: &str) -> Result<String, String> {
+    let client = reqwest::Client::new();
     let body = serde_json::json!({ "url": url });
 
     let response = client
         .post(format!("{}/page", daemon_url))
         .json(&body)
         .send()
+        .await
         .map_err(|e| format!("Request failed: {}", e))?;
 
     response
         .text()
+        .await
         .map_err(|e| format!("Failed to read response: {}", e))
 }
 
-pub fn client_render_page(daemon_url: &str, page_id: &str) -> Result<String, String> {
-    let client = reqwest::blocking::Client::new();
+pub async fn client_render_page(daemon_url: &str, page_id: &str) -> Result<String, String> {
+    let client = reqwest::Client::new();
 
     let response = client
         .get(format!("{}/page/{}/render", daemon_url, page_id))
         .send()
+        .await
         .map_err(|e| format!("Request failed: {}", e))?;
 
     response
         .text()
+        .await
         .map_err(|e| format!("Failed to read response: {}", e))
 }
 
-pub fn client_markdown_page(daemon_url: &str, page_id: &str) -> Result<String, String> {
-    let client = reqwest::blocking::Client::new();
+pub async fn client_markdown_page(daemon_url: &str, page_id: &str) -> Result<String, String> {
+    let client = reqwest::Client::new();
 
     let response = client
         .get(format!("{}/page/{}/markdown", daemon_url, page_id))
         .send()
+        .await
         .map_err(|e| format!("Request failed: {}", e))?;
 
     response
         .text()
+        .await
         .map_err(|e| format!("Failed to read response: {}", e))
 }
 
-pub fn client_eval_js(
+pub async fn client_eval_js(
     daemon_url: &str,
     page_id: &str,
     script: &str,
 ) -> Result<String, String> {
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let body = serde_json::json!({ "script": script });
 
     let response = client
         .post(format!("{}/page/{}/eval", daemon_url, page_id))
         .json(&body)
         .send()
+        .await
         .map_err(|e| format!("Request failed: {}", e))?;
 
     response
         .text()
+        .await
         .map_err(|e| format!("Failed to read response: {}", e))
 }
 
-pub fn client_click_element(
+pub async fn client_click_element(
     daemon_url: &str,
     page_id: &str,
     selector: &str,
 ) -> Result<String, String> {
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let body = serde_json::json!({ "selector": selector });
 
     let response = client
         .post(format!("{}/page/{}/click", daemon_url, page_id))
         .json(&body)
         .send()
+        .await
         .map_err(|e| format!("Request failed: {}", e))?;
 
     response
         .text()
+        .await
         .map_err(|e| format!("Failed to read response: {}", e))
 }
 
-pub fn client_fill_element(
+pub async fn client_fill_element(
     daemon_url: &str,
     page_id: &str,
     selector: &str,
     value: &str,
 ) -> Result<String, String> {
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let body = serde_json::json!({ "selector": selector, "value": value });
 
     let response = client
         .post(format!("{}/page/{}/fill", daemon_url, page_id))
         .json(&body)
         .send()
+        .await
         .map_err(|e| format!("Request failed: {}", e))?;
 
     response
         .text()
+        .await
         .map_err(|e| format!("Failed to read response: {}", e))
 }
 
-pub fn client_close_page(daemon_url: &str, page_id: &str) -> Result<String, String> {
-    let client = reqwest::blocking::Client::new();
+pub async fn client_close_page(daemon_url: &str, page_id: &str) -> Result<String, String> {
+    let client = reqwest::Client::new();
 
     let response = client
         .delete(format!("{}/page/{}", daemon_url, page_id))
         .send()
+        .await
         .map_err(|e| format!("Request failed: {}", e))?;
 
     response
         .text()
+        .await
         .map_err(|e| format!("Failed to read response: {}", e))
 }
 
-pub fn client_health(daemon_url: &str) -> Result<String, String> {
-    let client = reqwest::blocking::Client::new();
+pub async fn client_health(daemon_url: &str) -> Result<String, String> {
+    let client = reqwest::Client::new();
 
     let response = client
         .get(format!("{}/health", daemon_url))
         .send()
+        .await
         .map_err(|e| format!("Request failed: {}", e))?;
 
     response
         .text()
+        .await
         .map_err(|e| format!("Failed to read response: {}", e))
 }
 
 // --- Helper ---
 
-fn fetch_url(url: &str) -> Result<String, String> {
-    reqwest::blocking::get(url)
+async fn fetch_url(url: &str) -> Result<String, String> {
+    reqwest::get(url)
+        .await
         .map_err(|e| format!("Failed to fetch URL: {}", e))?
         .text()
+        .await
         .map_err(|e| format!("Failed to read response body: {}", e))
 }
