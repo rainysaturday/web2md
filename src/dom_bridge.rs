@@ -442,6 +442,10 @@ function __serializeElement(el) {
     if (el._tag === '#document') {
         return __serializeElement(__dom._rootElement);
     }
+    // Text nodes: just return their text content directly, not as HTML tags
+    if (el._tag === '#text') {
+        return el._textContent;
+    }
 
     var tag = el._tag;
     var attrs = '';

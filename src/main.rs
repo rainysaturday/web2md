@@ -324,7 +324,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = page.render_now();
         } else {
             // Process through full lifecycle
-            let _ = page.process();
+            let _ = page.process().await;
         }
 
         // Get Markdown output
@@ -717,6 +717,9 @@ mod integration_tests {
             "Expected rendered HTML to contain 'Modified by JS', got: {}", rendered_html);
         assert!(rendered_html.contains("New paragraph"),
             "Expected rendered HTML to contain 'New paragraph', got: {}", rendered_html);
+        // Verify no <#text> tags leak into output
+        assert!(!rendered_html.contains("<#text>"),
+            "HTML should not contain <#text> tags, got: {}", rendered_html);
     }
 
     #[test]
@@ -750,6 +753,9 @@ mod integration_tests {
             "Expected 'Hello World' in rendered HTML, got: {}", rendered_html);
         assert!(rendered_html.contains("greeting"),
             "Expected 'greeting' in rendered HTML, got: {}", rendered_html);
+        // Verify no <#text> tags leak into output
+        assert!(!rendered_html.contains("<#text>"),
+            "HTML should not contain <#text> tags, got: {}", rendered_html);
     }
 
     #[test]
@@ -771,5 +777,32 @@ mod integration_tests {
         
         assert!(rendered_html.contains("Title"), "Expected 'Title' in rendered HTML");
         assert!(rendered_html.contains("Content"), "Expected 'Content' in rendered HTML");
+        assert!(!rendered_html.contains("<#text>"), "HTML should not contain <#text> tags");
+    }
+    #[test]
+    fn test_js_inline_scripts_executed_during_process() {
+        let html = String::from(r#"<html><body><div id="content">Original</div><script>document.getElementById('content').textContent = 'Modified by JS process';</script></body></html>"#);
+        let config = RenderConfig {
+            enable_js: true,
+            render_timeout: Duration::from_secs(5),
+            quiet_period: Duration::from_millis(10),
+            fetch_external_scripts: false,
+            with_images: false,
+            inject_scripts: vec![],
+            inject_codes: vec![],
+        };
+
+        // Need an async runtime for process()
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (rendered_html, _state) = rt.block_on(async {
+            let mut page = Page::new(String::from("http://example.com"), html, config);
+            let _ = page.process().await;
+            let html = page.render_now();
+            (html, page.state())
+        });
+        
+        assert!(rendered_html.contains("Modified by JS process"),
+            "Expected 'Modified by JS process' in rendered HTML, got: {}", rendered_html);
     }
 }
+
