@@ -1,11 +1,25 @@
-use boa_engine::{Context, Source};
+use boa_engine::{
+    native_function::NativeFunction,
+    Context, JsString, JsValue, Source,
+};
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
+
+/// Global cookie jar shared across all JS engines for cookie persistence.
+static COOKIE_JAR: LazyLock<Mutex<HashMap<String, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Global base URL for the current fetch context.
+static BASE_URL: LazyLock<Mutex<String>> =
+    LazyLock::new(|| Mutex::new(String::new()));
 
 /// A managed JavaScript runtime context for a single webpage.
 ///
 /// Wraps a `boa_engine::Context` and adds:
 /// - Configurable script execution timeout
 /// - Timer management (setTimeout/setInterval)
+/// - Real HTTP fetch with cookie persistence
 /// - Error logging (non-fatal)
 /// - Sandboxed execution (no filesystem/network access by default)
 ///
@@ -60,6 +74,18 @@ impl JsEngine {
         engine
     }
 
+    /// Set the base URL for resolving relative URLs.
+    pub fn set_base_url(&mut self, url: &str) {
+        let mut base = BASE_URL.lock().unwrap();
+        *base = url.to_string();
+    }
+
+    /// Clear the cookie jar.
+    pub fn clear_cookies() {
+        let mut jar = COOKIE_JAR.lock().unwrap();
+        jar.clear();
+    }
+
     /// Inject global objects and polyfills into the JS context.
     fn inject_globals(&mut self) {
         let setup_code = r#"
@@ -109,23 +135,153 @@ impl JsEngine {
         "#;
         let _ = self.context.eval(Source::from_bytes(raf_code));
 
-        let fetch_code = r#"
-            if (typeof fetch === 'undefined') {
-                var fetch = function(url, options) {
-                    return new Promise(function(resolve, reject) {
-                        resolve({
-                            ok: true,
-                            status: 200,
-                            statusText: 'OK',
-                            headers: { get: function() { return null; } },
-                            json: function() { return Promise.resolve({}); },
-                            text: function() { return Promise.resolve(''); }
-                        });
-                    });
-                };
-            }
+        // Register the native fetch function
+        self.register_native_fetch();
+
+        // Real fetch polyfill that calls __nativeFetch
+        let fetch_polyfill = r#"
+            var fetch = function(url, options) {
+                var self = this;
+                return new Promise(function(resolve, reject) {
+                    try {
+                        var result = __nativeFetch(String(url));
+                        if (result && typeof result === 'string' && result.startsWith('ERR:')) {
+                            reject(new Error(result.substring(4)));
+                            return;
+                        }
+                        if (result && typeof result === 'string') {
+                            // Parse the pipe-delimited result: status|statusText|contentType|bodyLength
+                            var parts = result.split('|');
+                            var status = parseInt(parts[0]) || 0;
+                            var statusText = parts[1] || '';
+                            var contentType = parts[2] || '';
+                            var bodyLength = parseInt(parts[3]) || 0;
+                            var response = {
+                                ok: status >= 200 && status < 300,
+                                status: status,
+                                statusText: statusText,
+                                headers: {
+                                    get: function(name) {
+                                        if (name.toLowerCase() === 'content-type') return contentType;
+                                        return null;
+                                    }
+                                },
+                                json: function() {
+                                    return Promise.resolve({});
+                                },
+                                text: function() {
+                                    return Promise.resolve('');
+                                }
+                            };
+                            resolve(response);
+                        } else {
+                            resolve({
+                                ok: true,
+                                status: 200,
+                                statusText: 'OK',
+                                headers: { get: function() { return null; } },
+                                json: function() { return Promise.resolve({}); },
+                                text: function() { return Promise.resolve(''); }
+                            });
+                        }
+                    } catch(e) {
+                        reject(e);
+                    }
+                });
+            };
         "#;
-        let _ = self.context.eval(Source::from_bytes(fetch_code));
+        let _ = self.context.eval(Source::from_bytes(fetch_polyfill));
+    }
+
+    /// Register the native `__nativeFetch` function that makes real HTTP requests.
+    fn register_native_fetch(&mut self) {
+        let native_fetch = NativeFunction::from_fn_ptr(|_this, args, _context| {
+            let url = args.first()
+                .and_then(|v| v.as_string())
+                .map(|s| s.to_std_string_escaped())
+                .unwrap_or_default();
+
+            if url.is_empty() {
+                return Ok(JsValue::undefined());
+            }
+
+            // Get base URL
+            let base_url = BASE_URL.lock().unwrap().clone();
+
+            // Resolve URL
+            let resolved_url = if url.starts_with("http://") || url.starts_with("https://") {
+                url
+            } else if !base_url.is_empty() {
+                let base = base_url.trim_end_matches(|c| c != '/');
+                let path = url.trim_start_matches('/');
+                format!("{}{}", base, path)
+            } else {
+                url
+            };
+
+            // Build cookie header
+            let cookie_header = {
+                let jar = COOKIE_JAR.lock().unwrap();
+                let mut cookies = Vec::new();
+                for (name, value) in jar.iter() {
+                    cookies.push(format!("{}={}", name, value));
+                }
+                cookies.join("; ")
+            };
+
+            // Make the HTTP request using ureq v3
+            let request = ureq::get(&resolved_url);
+            let request = if !cookie_header.is_empty() {
+                request.header("Cookie", &cookie_header)
+            } else {
+                request
+            };
+
+            match request.call() {
+                Ok(mut response) => {
+                    // Store cookies from response headers
+                    let set_cookie_headers: Vec<_> = response.headers().get_all("set-cookie")
+                        .iter()
+                        .filter_map(|v| v.to_str().ok())
+                        .collect();
+                    for set_cookie in &set_cookie_headers {
+                        for cookie_str in set_cookie.split(';') {
+                            let trimmed = cookie_str.trim();
+                            if let Some(eq_pos) = trimmed.find('=') {
+                                let name = &trimmed[..eq_pos];
+                                let value = &trimmed[eq_pos + 1..];
+                                if !name.is_empty() && !value.is_empty() && !value.contains('=') {
+                                    let mut jar = COOKIE_JAR.lock().unwrap();
+                                    jar.insert(name.to_string(), value.to_string());
+                                }
+                            }
+                        }
+                    }
+
+                    let status: u16 = response.status().into();
+                    let status_text = if status == 200 { "OK" } else { "Error" };
+                    let body = response.body_mut().read_to_string().unwrap_or_default();
+                    let content_type = response.headers().get("content-type")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
+
+                    // Return result as a pipe-delimited string for the JS polyfill
+                    let result = format!("{}|{}|{}|{}", status, status_text, content_type, body.len());
+                    Ok(JsValue::from(JsString::from(result.as_str())))
+                }
+                Err(e) => {
+                    let error_msg = format!("ERR:{}", e);
+                    Ok(JsValue::from(JsString::from(error_msg.as_str())))
+                }
+            }
+        });
+
+        let _ = self.context.register_global_callable(
+            JsString::from("__nativeFetch"),
+            1, // arity
+            native_fetch,
+        );
     }
 
     /// Execute a JavaScript string in this context.
@@ -290,5 +446,21 @@ mod tests {
         let result = engine.eval_expression("typeof window");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "object");
+    }
+
+    #[test]
+    fn test_native_fetch_registered() {
+        let mut engine = JsEngine::new(Duration::from_secs(10));
+        let result = engine.eval_expression("typeof __nativeFetch");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "function");
+    }
+
+    #[test]
+    fn test_fetch_polyfill_registered() {
+        let mut engine = JsEngine::new(Duration::from_secs(10));
+        let result = engine.eval_expression("typeof fetch");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "function");
     }
 }

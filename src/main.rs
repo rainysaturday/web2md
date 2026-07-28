@@ -675,3 +675,101 @@ mod tests {
         assert_eq!(bridge.pending_count(), 0);
     }
 }
+
+
+#[cfg(test)]
+mod integration_tests {
+    use crate::page::{Page, RenderConfig};
+    use std::time::Duration;
+
+    #[test]
+    fn test_dom_bridge_js_changes_reflected_in_html() {
+        let html = String::from(r#"<html><head></head><body><div id="content">Original</div></body></html>"#);
+        let config = RenderConfig {
+            enable_js: true,
+            render_timeout: Duration::from_secs(5),
+            quiet_period: Duration::from_millis(10),
+            fetch_external_scripts: false,
+            with_images: false,
+            inject_scripts: vec![],
+            inject_codes: vec![],
+        };
+
+        let mut page = Page::new(String::from("http://example.com"), html, config);
+        
+        let js_code = String::from(r#"
+            var div = document.getElementById('content');
+            if (div) {
+                div.textContent = 'Modified by JS';
+                div.setAttribute('data-modified', 'true');
+            }
+            var newEl = document.createElement('p');
+            newEl.textContent = 'New paragraph';
+            document.body.appendChild(newEl);
+        "#);
+        
+        let result = page.execute_js(&js_code, "test_modify");
+        assert!(result.is_ok(), "JS execution failed: {:?}", result);
+        
+        let rendered_html = page.render_now();
+        
+        assert!(rendered_html.contains("Modified by JS"), 
+            "Expected rendered HTML to contain 'Modified by JS', got: {}", rendered_html);
+        assert!(rendered_html.contains("New paragraph"),
+            "Expected rendered HTML to contain 'New paragraph', got: {}", rendered_html);
+    }
+
+    #[test]
+    fn test_dom_bridge_create_element() {
+        let html = String::from(r#"<html><head></head><body></body></html>"#);
+        let config = RenderConfig {
+            enable_js: true,
+            render_timeout: Duration::from_secs(5),
+            quiet_period: Duration::from_millis(10),
+            fetch_external_scripts: false,
+            with_images: false,
+            inject_scripts: vec![],
+            inject_codes: vec![],
+        };
+
+        let mut page = Page::new(String::from("http://example.com"), html, config);
+        
+        let js_code = String::from(r#"
+            var div = document.createElement('div');
+            div.textContent = 'Hello World';
+            div.setAttribute('class', 'greeting');
+            document.body.appendChild(div);
+        "#);
+        
+        let result = page.execute_js(&js_code, "test_create");
+        assert!(result.is_ok(), "JS execution failed: {:?}", result);
+        
+        let rendered_html = page.render_now();
+        
+        assert!(rendered_html.contains("Hello World"),
+            "Expected 'Hello World' in rendered HTML, got: {}", rendered_html);
+        assert!(rendered_html.contains("greeting"),
+            "Expected 'greeting' in rendered HTML, got: {}", rendered_html);
+    }
+
+    #[test]
+    fn test_serialize_dom_full() {
+        let html = String::from(r#"<html><head></head><body><h1>Title</h1><p>Content</p></body></html>"#);
+        let config = RenderConfig {
+            enable_js: true,
+            render_timeout: Duration::from_secs(5),
+            quiet_period: Duration::from_millis(10),
+            fetch_external_scripts: false,
+            with_images: false,
+            inject_scripts: vec![],
+            inject_codes: vec![],
+        };
+
+        let mut page = Page::new(String::from("http://example.com"), html, config);
+        
+        let rendered_html = page.render_now();
+        
+        assert!(rendered_html.contains("Title"), "Expected 'Title' in rendered HTML");
+        assert!(rendered_html.contains("Content"), "Expected 'Content' in rendered HTML");
+    }
+}

@@ -130,8 +130,13 @@ impl Page {
         let bridge = DomBridge::new(self.html.clone());
 
         // Inject the DOM API shim into the JS engine
-        let dom_api_code = bridge.dom_api_code();
+        let dom_api_code = DomBridge::dom_api_code();
         let _ = engine.execute(dom_api_code, "dom_api_shim");
+
+        // Inject the page HTML into the JS virtual DOM
+        if let Err(e) = bridge.inject_html_into_js(&mut engine, &self.html) {
+            self.errors.push(format!("Failed to inject HTML into JS: {}", e));
+        }
 
         // Inject user-provided scripts and code
         for script_path in &self.config.inject_scripts {
@@ -215,9 +220,9 @@ impl Page {
                     .unwrap_or(false);
 
                 if !has_pending_timers && !has_pending_dom {
-                    // Apply any pending DOM changes
-                    if let Some(ref mut bridge) = self.dom_bridge {
-                        self.html = bridge.finalize();
+                    // Serialize JS virtual DOM to HTML
+                    if let (Some(ref mut bridge), Some(ref mut engine)) = (self.dom_bridge.as_mut(), self.js_engine.as_mut()) {
+                        self.html = bridge.finalize(engine);
                     }
 
                     // Check if we've been quiet long enough
@@ -243,9 +248,9 @@ impl Page {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        // Finalize: apply any remaining DOM changes
-        if let Some(ref mut bridge) = self.dom_bridge {
-            self.html = bridge.finalize();
+        // Finalize: serialize JS virtual DOM to HTML
+        if let (Some(ref mut bridge), Some(ref mut engine)) = (self.dom_bridge.as_mut(), self.js_engine.as_mut()) {
+            self.html = bridge.finalize(engine);
         }
 
         // Clean up timers
@@ -360,8 +365,8 @@ impl Page {
 
     /// Force render the current DOM state immediately without waiting for stabilization.
     pub fn render_now(&mut self) -> String {
-        if let Some(ref mut bridge) = self.dom_bridge {
-            self.html = bridge.finalize();
+        if let (Some(ref mut bridge), Some(ref mut engine)) = (self.dom_bridge.as_mut(), self.js_engine.as_mut()) {
+            self.html = bridge.finalize(engine);
         }
         self.html.clone()
     }
