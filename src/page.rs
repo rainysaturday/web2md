@@ -46,7 +46,7 @@ impl Default for RenderConfig {
             with_images: false,
             inject_scripts: Vec::new(),
             inject_codes: Vec::new(),
-            enable_js: false,
+            enable_js: true,
         }
     }
 }

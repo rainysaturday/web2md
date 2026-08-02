@@ -38,9 +38,9 @@ struct Cli {
 
     // --- JavaScript / Render Lifecycle Flags ---
 
-    /// Enable JavaScript execution for the fetched page
-    #[arg(long = "enable-js")]
-    enable_js: bool,
+    /// Disable JavaScript execution for the fetched page
+    #[arg(long = "disable-js")]
+    disable_js: bool,
 
     /// Maximum time to wait for page stabilization (seconds, default: 30)
     #[arg(long = "render-timeout")]
@@ -300,10 +300,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let response = reqwest::get(&url).await?;
     let html = response.text().await?;
 
-    // If JS is enabled, use the full page processing pipeline
-    if args.enable_js {
+    // If JS is not disabled, use the full page processing pipeline
+    if !args.disable_js {
         let config = RenderConfig {
-            enable_js: true,
+            enable_js: !args.disable_js,
             with_images: args.with_images,
             render_timeout: Duration::from_secs(args.render_timeout.unwrap_or(30)),
             quiet_period: Duration::from_millis(args.quiet_period.unwrap_or(100)),
