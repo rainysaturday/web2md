@@ -7,7 +7,7 @@
 
 ## Description
 
-Embed a lightweight JavaScript runtime into `webmd` so that JavaScript on downloaded webpages can be executed. This transforms `webmd` from a static HTML fetcher into a partial headless browser that can run scripts and dynamically update page content.
+Embed a lightweight JavaScript runtime into `web2md` so that JavaScript on downloaded webpages can be executed. This transforms `web2md` from a static HTML fetcher into a partial headless browser that can run scripts and dynamically update page content.
 
 The JavaScript engine must be small, Rust-native, and suitable for embedding — not a full Node.js or browser environment. It needs only to support the subset of ECMAScript required to execute common webpage helper scripts (e.g., content loading, DOM manipulation, event handlers). CSS rendering, layout, and visual rendering are explicitly **out of scope**.
 

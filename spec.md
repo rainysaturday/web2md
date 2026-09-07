@@ -1,4 +1,4 @@
-webmd is a small Rust-based CLI tool for downloading a webpage and converting the HTML into Markdown.
+web2md is a small Rust-based CLI tool for downloading a webpage and converting the HTML into Markdown.
 
 This makes it easy to get a minimal readable representation of the webpage from CLI.
 

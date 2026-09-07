@@ -3211,7 +3211,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "webmd"
+name = "web2md"
 version = "0.1.0"
 dependencies = [
  "actix-web",

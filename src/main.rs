@@ -62,10 +62,10 @@ pub fn resolve_user_agent(spec: &str) -> String {
 // ============================================================
 
 #[derive(Parser, Debug)]
-#[command(name = "webmd")]
+#[command(name = "web2md")]
 #[command(about = "Download a webpage and convert HTML to Markdown")]
 #[command(version)]
-#[command(long_about = "webmd - Webpage to Markdown converter\n\
+#[command(long_about = "web2md - Webpage to Markdown converter\n\
     Fetches a webpage, optionally executes JavaScript, \
     and converts the HTML to clean Markdown.\n\
     Supports daemon mode for stateful page access.")]
@@ -119,7 +119,7 @@ struct Cli {
 
     // --- Daemon Flags ---
 
-    /// Start webmd in daemon mode
+    /// Start web2md in daemon mode
     #[arg(long = "daemon")]
     daemon: bool,
 
@@ -341,7 +341,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let url = match &args.url {
         Some(u) => u.clone(),
         None => {
-            eprintln!("Error: No URL provided. Run 'webmd --help' for usage.");
+            eprintln!("Error: No URL provided. Run 'web2md --help' for usage.");
             std::process::exit(1);
         }
     };

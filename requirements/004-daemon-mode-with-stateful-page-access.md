@@ -7,16 +7,16 @@
 
 ## Description
 
-`webmd` currently operates as a one-shot CLI tool: it fetches a URL, converts to Markdown, and exits. To support stateful, repeated access to webpages (e.g., checking for updates, interacting with session state, re-rendering after JS mutations), `webmd` needs a **daemon mode** that runs as a persistent background process.
+`web2md` currently operates as a one-shot CLI tool: it fetches a URL, converts to Markdown, and exits. To support stateful, repeated access to webpages (e.g., checking for updates, interacting with session state, re-rendering after JS mutations), `web2md` needs a **daemon mode** that runs as a persistent background process.
 
-In daemon mode, `webmd` listens on a local socket (HTTP or Unix socket) for commands. It maintains a cache of open "pages" — each with its own JS context, DOM state, and lifecycle manager. Clients can send requests to fetch new pages, trigger re-renders, inject JavaScript, and retrieve the current Markdown output — all without restarting the process or re-fetching the page.
+In daemon mode, `web2md` listens on a local socket (HTTP or Unix socket) for commands. It maintains a cache of open "pages" — each with its own JS context, DOM state, and lifecycle manager. Clients can send requests to fetch new pages, trigger re-renders, inject JavaScript, and retrieve the current Markdown output — all without restarting the process or re-fetching the page.
 
 ---
 
 ## Acceptance Criteria
 
 ### AC-004-1: Daemon Startup & Shutdown
-- CLI flag `--daemon` starts `webmd` in daemon mode (runs as a foreground process by default; `--daemon --background` forks to background).
+- CLI flag `--daemon` starts `web2md` in daemon mode (runs as a foreground process by default; `--daemon --background` forks to background).
 - CLI flag `--daemon-port <port>` sets the HTTP listen port (default: `8765`).
 - CLI flag `--daemon-socket <path>` sets a Unix socket path instead of TCP (mutually exclusive with `--daemon-port`).
 - `SIGINT` / `SIGTERM` cleanly shuts down the daemon, saving any persistent state.

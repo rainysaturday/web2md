@@ -7,9 +7,9 @@
 
 ## Description
 
-When JavaScript executes on a fetched webpage, it must be able to manipulate the page's HTML structure — modifying elements, adding/removing nodes, changing attributes and text content. These DOM changes must be reflected in the HTML that `webmd` captures for Markdown conversion.
+When JavaScript executes on a fetched webpage, it must be able to manipulate the page's HTML structure — modifying elements, adding/removing nodes, changing attributes and text content. These DOM changes must be reflected in the HTML that `web2md` captures for Markdown conversion.
 
-This requirement covers the bridge between the JS runtime and the HTML parser so that `document.createElement`, `innerHTML`, `appendChild`, `removeChild`, `setAttribute`, and similar standard DOM APIs update the underlying HTML document that `webmd` will ultimately render to Markdown.
+This requirement covers the bridge between the JS runtime and the HTML parser so that `document.createElement`, `innerHTML`, `appendChild`, `removeChild`, `setAttribute`, and similar standard DOM APIs update the underlying HTML document that `web2md` will ultimately render to Markdown.
 
 CSS rendering, computed styles, and visual layout are **not** required — only the structural HTML tree needs to be updated.
 

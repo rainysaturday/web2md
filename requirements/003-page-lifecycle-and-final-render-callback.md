@@ -7,7 +7,7 @@
 
 ## Description
 
-Webpages that rely on JavaScript often go through a lifecycle: initial HTML parse, script execution, asynchronous content loading, and eventual stabilization. `webmd` must manage this lifecycle to capture the "final" rendered HTML once the page is stable, rather than snapshotting a partially-loaded DOM.
+Webpages that rely on JavaScript often go through a lifecycle: initial HTML parse, script execution, asynchronous content loading, and eventual stabilization. `web2md` must manage this lifecycle to capture the "final" rendered HTML once the page is stable, rather than snapshotting a partially-loaded DOM.
 
 This requirement defines a **final render callback** mechanism: after all synchronous scripts have run, `setTimeout`/`setInterval` timers have been processed, and the DOM has stabilized, a callback is invoked to return the finalized HTML. A **maximum render timeout** prevents waiting indefinitely on pages that continuously update (e.g., live tickers, chat widgets).
 
