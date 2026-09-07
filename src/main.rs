@@ -12,6 +12,51 @@ use std::time::Duration;
 
 use page::{Page, RenderConfig};
 
+
+// ============================================================
+// User Agent Presets
+// ============================================================
+
+/// Common user-agent presets selectable via `--user-agent`.
+const UA_PRESETS: &[(&str, &str)] = &[
+    (
+        "firefox",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    ),
+    (
+        "chrome",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    ),
+    (
+        "safari",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    ),
+    (
+        "edge",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+    ),
+    (
+        "curl",
+        "curl/8.5.0",
+    ),
+];
+
+/// Resolve a user-agent specifier to a full user-agent string.
+///
+/// Recognized named presets (case-insensitive) are `firefox`, `chrome`,
+/// `safari`, `edge`, and `curl`. Any other value is treated as a literal
+/// user-agent string.
+pub fn resolve_user_agent(spec: &str) -> String {
+    let lower = spec.trim().to_lowercase();
+    for (name, ua) in UA_PRESETS {
+        if *name == lower {
+            return ua.to_string();
+        }
+    }
+    spec.trim().to_string()
+}
+
+
 // ============================================================
 // CLI Argument Parsing
 // ============================================================
@@ -57,6 +102,10 @@ struct Cli {
     /// Do not fetch or execute external <script src="..."> references
     #[arg(long = "no-external-scripts")]
     no_external_scripts: bool,
+
+    /// User agent string or preset (firefox, chrome, safari, edge, curl) for HTTP requests
+    #[arg(long = "user-agent")]
+    user_agent: Option<String>,
 
     // --- Script Injection ---
 
@@ -219,7 +268,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             match client_command {
                 ClientCommand::Fetch { url } => {
-                    match daemon::client_fetch_page(&daemon_url, url).await {
+                    let ua = args.user_agent.clone().as_deref().map(resolve_user_agent);
+                    match daemon::client_fetch_page(&daemon_url, url, ua).await {
                         Ok(response) => println!("{}", response),
                         Err(e) => eprintln!("Error: {}", e),
                     }
@@ -296,8 +346,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // Resolve the user agent (named preset or literal string).
+    let user_agent = args.user_agent.as_deref().map(resolve_user_agent);
+
     // Fetch the webpage
-    let response = reqwest::get(&url).await?;
+    let mut client_builder = reqwest::Client::builder();
+    if let Some(ua) = &user_agent {
+        client_builder = client_builder.user_agent(ua);
+    }
+    let client = client_builder.build()?;
+    let response = client.get(&url).send().await?;
     let html = response.text().await?;
 
     // If JS is not disabled, use the full page processing pipeline
@@ -310,6 +368,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             fetch_external_scripts: !args.no_external_scripts,
             inject_scripts: args.inject_scripts.clone(),
             inject_codes: args.inject_codes.clone(),
+            user_agent: user_agent.clone(),
         };
 
         let mut page = Page::new(url, html, config);

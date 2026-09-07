@@ -35,6 +35,8 @@ pub struct RenderConfig {
     pub inject_codes: Vec<String>,
     /// Whether to enable JS execution at all.
     pub enable_js: bool,
+    /// User agent string to use for HTTP requests (e.g. external scripts).
+    pub user_agent: Option<String>,
 }
 
 impl Default for RenderConfig {
@@ -47,6 +49,7 @@ impl Default for RenderConfig {
             inject_scripts: Vec::new(),
             inject_codes: Vec::new(),
             enable_js: true,
+            user_agent: None,
         }
     }
 }
@@ -127,6 +130,9 @@ impl Page {
     /// Set up the JS engine and DOM bridge for this page.
     fn setup_js_engine(&mut self) {
         let mut engine = JsEngine::new(self.config.render_timeout);
+        if let Some(ua) = &self.config.user_agent {
+            engine.set_user_agent(ua);
+        }
         let bridge = DomBridge::new(self.html.clone());
 
         // Inject the DOM API shim into the JS engine
@@ -300,6 +306,15 @@ impl Page {
             let src_re = Regex::new(r#"<script\s+[^>]*src\s*=\s*"([^"]*)"[^>]*>"#).unwrap();
             let mut script_count = 0;
 
+            // Build an HTTP client with the configured user agent (if any).
+            let mut client_builder = reqwest::Client::builder();
+            if let Some(ua) = &self.config.user_agent {
+                client_builder = client_builder.user_agent(ua);
+            }
+            let client = client_builder
+                .build()
+                .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
             for cap in src_re.captures_iter(&self.html) {
                 let src = cap.get(1).map(|m| m.as_str()).unwrap_or("");
                 if src.is_empty() {
@@ -316,7 +331,7 @@ impl Page {
                 };
 
                 // Fetch the script using async reqwest
-                match reqwest::get(&absolute_url).await {
+                match client.get(&absolute_url).send().await {
                     Ok(response) => match response.text().await {
                         Ok(script_content) => {
                             let result = engine.execute(

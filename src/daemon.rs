@@ -43,6 +43,8 @@ pub struct FetchPageRequest {
     pub quiet_period: Option<u64>,
     #[serde(default)]
     pub enable_js: Option<bool>,
+    #[serde(default)]
+    pub user_agent: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -119,10 +121,11 @@ async fn fetch_page(
         with_images: body.with_images.unwrap_or(false),
         render_timeout: Duration::from_secs(body.render_timeout.unwrap_or(30)),
         quiet_period: Duration::from_millis(body.quiet_period.unwrap_or(100)),
+        user_agent: body.user_agent.as_deref().map(crate::resolve_user_agent),
         ..Default::default()
     };
 
-    let html = match fetch_url(&body.url).await {
+    let html = match fetch_url(&body.url, body.user_agent.as_deref()).await {
         Ok(h) => h,
         Err(e) => {
             return HttpResponse::InternalServerError().json(ErrorResponse {
@@ -606,9 +609,16 @@ pub async fn start_daemon(
 
 // --- Client functions ---
 
-pub async fn client_fetch_page(daemon_url: &str, url: &str) -> Result<String, String> {
+pub async fn client_fetch_page(
+    daemon_url: &str,
+    url: &str,
+    user_agent: Option<String>,
+) -> Result<String, String> {
     let client = reqwest::Client::new();
-    let body = serde_json::json!({ "url": url });
+    let mut body = serde_json::json!({ "url": url });
+    if let Some(ua) = user_agent {
+        body["user_agent"] = serde_json::json!(ua);
+    }
 
     let response = client
         .post(format!("{}/page", daemon_url))
@@ -749,8 +759,18 @@ pub async fn client_health(daemon_url: &str) -> Result<String, String> {
 
 // --- Helper ---
 
-async fn fetch_url(url: &str) -> Result<String, String> {
-    reqwest::get(url)
+async fn fetch_url(url: &str, user_agent: Option<&str>) -> Result<String, String> {
+    let mut client_builder = reqwest::Client::builder();
+    if let Some(ua) = user_agent {
+        client_builder = client_builder.user_agent(ua);
+    }
+    let client = client_builder
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+    client
+        .get(url)
+        .send()
         .await
         .map_err(|e| format!("Failed to fetch URL: {}", e))?
         .text()

@@ -14,6 +14,10 @@ static COOKIE_JAR: LazyLock<Mutex<HashMap<String, String>>> =
 static BASE_URL: LazyLock<Mutex<String>> =
     LazyLock::new(|| Mutex::new(String::new()));
 
+/// Global user agent string for the current fetch context.
+static USER_AGENT: LazyLock<Mutex<String>> =
+    LazyLock::new(|| Mutex::new(String::new()));
+
 /// A managed JavaScript runtime context for a single webpage.
 ///
 /// Wraps a `boa_engine::Context` and adds:
@@ -78,6 +82,12 @@ impl JsEngine {
     pub fn set_base_url(&mut self, url: &str) {
         let mut base = BASE_URL.lock().unwrap();
         *base = url.to_string();
+    }
+
+    /// Set the user agent used for HTTP requests.
+    pub fn set_user_agent(&mut self, ua: &str) {
+        let mut current = USER_AGENT.lock().unwrap();
+        *current = ua.to_string();
     }
 
     /// Clear the cookie jar.
@@ -230,12 +240,14 @@ impl JsEngine {
             };
 
             // Make the HTTP request using ureq v3
-            let request = ureq::get(&resolved_url);
-            let request = if !cookie_header.is_empty() {
-                request.header("Cookie", &cookie_header)
-            } else {
-                request
-            };
+            let mut request = ureq::get(&resolved_url);
+            if !cookie_header.is_empty() {
+                request = request.header("Cookie", &cookie_header);
+            }
+            let ua = USER_AGENT.lock().unwrap().clone();
+            if !ua.is_empty() {
+                request = request.header("User-Agent", &ua);
+            }
 
             match request.call() {
                 Ok(mut response) => {
